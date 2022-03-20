@@ -113,10 +113,10 @@ function fittingGMMRec(data: Matrix, gmmParam: mixtureGaussianParameter, loglike
   });
 
   const newLogLikelihood = calcLogLikelihood(data, newGmmParam);
-  console.log("gmm log likelihood", newLogLikelihood);
   if (abs(newLogLikelihood - loglikehood) < epsilon) {
     return newGmmParam;
   }
+  
   return fittingGMMRec(data, newGmmParam, newLogLikelihood, epsilon);
 }
 

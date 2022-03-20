@@ -244,7 +244,7 @@ function calcDataTerm(
     
     const kernelI = gmm.cluster[index];
     const dataTerm = logGmmKernel(
-      matrix(rgbVector as [number, number, number]),
+      matrix([rgbVector] as [[number, number, number]]),
       gmm.p.u[kernelI],
       gmm.p.sigma[kernelI], 
       gmm.p.pi[kernelI], 
