@@ -3,49 +3,8 @@ import { mixtureGaussianParameter, logGmmKernel } from "../gmm/mathExtension";
 import { fittingGMM_T } from "../gmm/gmm";
 import { mincut } from "./mincut";
 
-export function grabcut(
-  input_img: ImageData,
-  foreground_indices: ReadonlyArray<number>,
-  background_indices: ReadonlyArray<number>
-): imgWithMask<rgba> {
-  console.log("convert1dRGBAImageArrayToRGBImg");
-  const seg_input_img = convert1dRGBAImageArrayToRGBImg(input_img.data, input_img.width, input_img.height);
-  console.log("done");
 
-  console.log("split foreground and background");
-  const maybe_foreground = seg_input_img.data.filter((_, index) => !background_indices.includes(index));
-  const background = background_indices.map(i => seg_input_img.data[i]);
-  console.log("done");
-
-  console.log("foreground fittingGMM_T");
-  const foreground_model = fittingGMM_T(maybe_foreground, 5);
-  console.log("done");
-  console.log("background fittingGMM_T");
-  const background_model = fittingGMM_T(background, 5);
-  console.log("done");
-
-  console.log("makeAdjacencyMatrixForFlow")
-  const {adjacencyMatrix, sourceIndex, terminalIndex} = makeAdjacencyMatrixForFlow(
-    seg_input_img,
-    foreground_model,
-    background_model,
-    foreground_indices,
-    background_indices
-  );
-  console.log("done");
-
-  console.log("mincut");
-  const mincutResult = mincut(adjacencyMatrix, sourceIndex, terminalIndex);
-  console.log("done");
-
-  const mask = Array<foreground|background>(seg_input_img.data.length).fill(0);
-  mincutResult.source.forEach(pixelIndex => mask[pixelIndex] = 1);
-
-  return {
-    ...convertRGBImgToRGBAImg(seg_input_img),
-    mask: mask
-  }
-}
+const GmmKernelNum = 5;
 
 type rgb = readonly [number, number, number];
 type rgba = readonly [number, number, number, number];
@@ -60,9 +19,126 @@ type img<T extends rgb|rgba> = {
 type foreground = 1;
 type background = 0;
 
+const foregroundFlag = 1;
+const backgroundFlag = 0;
+
 type imgWithMask<T extends rgb|rgba> = {
   readonly mask: ReadonlyArray<foreground|background>
 } & img<T>;
+
+
+export function grabcut(
+  input_img: ImageData,
+  foreground_indices: ReadonlyArray<number>,
+  background_indices: ReadonlyArray<number>
+): imgWithMask<rgba> {
+  const seg_input_img = convert1dRGBAImageArrayToRGBImg(input_img.data, input_img.width, input_img.height);
+
+  const maybe_foreground = seg_input_img.data.filter((_, index) => !background_indices.includes(index));
+  const background = background_indices.map(i => seg_input_img.data[i]);
+
+  const mask = execSegmentation(
+    seg_input_img,
+    maybe_foreground,
+    background,
+    foreground_indices,
+    background_indices
+  );
+
+  return grabcutRec(
+    seg_input_img,
+    foreground_indices,
+    background_indices,
+    mask
+  );
+}
+
+
+function grabcutRec(
+  input_img: img<rgb>,
+  foreground_constraints: ReadonlyArray<number>,
+  background_constraints: ReadonlyArray<number>,
+  preResultMask: (foreground|background)[]
+): imgWithMask<rgba> {
+  const {foregrounds, backgrounds} = preResultMask.reduce((pre, current, i) => {
+    if (current === backgroundFlag) {
+      pre.backgrounds.push(input_img.data[i]);
+    }else {
+      pre.foregrounds.push(input_img.data[i]);
+    }
+
+    return pre;
+  }, {
+    foregrounds: [] as rgb[],
+    backgrounds: [] as rgb[]
+  });
+
+  const mask = execSegmentation(
+    input_img,
+    foregrounds,
+    backgrounds,
+    foreground_constraints,
+    background_constraints
+  );
+
+  if (isDifferentMask(mask, preResultMask)) {
+    return grabcutRec(
+      input_img,
+      foreground_constraints,
+      background_constraints,
+      mask
+    );
+  }
+
+  return {
+    ...convertRGBImgToRGBAImg(input_img),
+    mask: mask
+  }
+}
+
+
+function execSegmentation(
+  input_img: img<rgb>,
+  foregrounds: readonly rgb[],
+  backgrounds: readonly rgb[],
+  foreground_constraints: readonly number[],
+  background_constraints: readonly number[]
+): (foreground|background)[] {
+  const foreground_model = fittingGMM_T(foregrounds, GmmKernelNum);
+  const background_model = fittingGMM_T(backgrounds, GmmKernelNum);
+
+  const {adjacencyMatrix, sourceIndex, terminalIndex} = makeAdjacencyMatrixForFlow(
+    input_img,
+    foreground_model,
+    background_model,
+    foreground_constraints,
+    background_constraints
+  );
+  
+  const mincutResult = mincut(adjacencyMatrix, sourceIndex, terminalIndex);
+
+  const mask = Array<foreground|background>(input_img.data.length).fill(backgroundFlag);
+  mincutResult.source.forEach(pixelIndex => mask[pixelIndex] = foregroundFlag);
+
+  return mask;
+}
+
+
+function isDifferentMask(
+  mask1: (foreground|background)[], mask2: (foreground|background)[]  
+): boolean {
+  if (mask1.length !== mask2.length) {
+    throw new Error(`maskの大きさが異なります  1: ${mask1.length}, 2: ${mask2.length}`);
+  }
+
+  for (let i = 0; i < mask1.length; i++) {
+    if (mask1[i] !== mask2[i]) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 
 //1次元のRGBA配列の画像データをRGBベクターの配列形式に変換する。
@@ -83,6 +159,7 @@ function convert1dRGBAImageArrayToRGBImg(arrayRGBA: Uint8ClampedArray, width: nu
     height
   }
 }
+
 
 function convertRGBImgToRGBAImg(source: img<rgb>): img<rgba> {
   return {
